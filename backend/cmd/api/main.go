@@ -1,36 +1,65 @@
 package main
 
 import (
+	"context"
+	"flag"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
+	"github.com/luism2302/tracker_mundial/internal/models"
 )
 
 type application struct {
-	logger *slog.Logger
+	logger   *slog.Logger
+	stickers *models.StickerModel
 }
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	fresh := flag.Bool("fresh", false, "specifies whether to build everything from scratch")
+	flag.Parse()
 
-	app := application{
-		logger: logger,
-	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	err := godotenv.Load(filepath.Join("..", ".env"))
 	if err != nil {
-		app.logger.Error("couldn't load .env")
+		log.Fatal("couldn't load .env")
 	}
 
 	addr := os.Getenv("PORT")
 	if addr == "" {
-		app.logger.Error("couldn't find PORT in .env")
+		log.Fatal("couldn't find PORT in .env")
 	}
 
-	app.logger.Info("starting api", slog.Any("addr", addr))
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("couldn't find DATABASE_URL in .env")
+	}
 
+	conn, err := pgx.Connect(context.Background(), dbURL)
+	if err != nil {
+		log.Fatalf("couldn't connect to database: %s", err.Error())
+	}
+
+	if err := conn.Ping(context.Background()); err != nil {
+		log.Fatalf("ping to database failed: %s", err.Error())
+	}
+
+	app := application{
+		logger:   logger,
+		stickers: &models.StickerModel{DB: conn},
+	}
+
+	if *fresh {
+		if err := app.buildAlbum(); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	log.Printf("API up and running at port %s", addr)
 	http.ListenAndServe(addr, app.routes())
 }
